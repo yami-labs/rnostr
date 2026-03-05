@@ -1,4 +1,4 @@
-use crate::Error;
+use crate::error::AppError;
 use libc::{c_char, c_int, c_uint, c_void, size_t, EINVAL};
 pub use lmdb_master_sys as ffi;
 use parking_lot::RwLock;
@@ -36,7 +36,7 @@ macro_rules! lmdb_try_with_cleanup {
     }};
 }
 
-type Result<T, E = Error> = core::result::Result<T, E>;
+type Result<T, E = AppError> = core::result::Result<T, E>;
 
 struct Dbi {
     inner: ffi::MDB_dbi,
@@ -44,7 +44,10 @@ struct Dbi {
 
 impl Dbi {
     fn new(txn: *mut ffi::MDB_txn, name: Option<&str>, flags: c_uint) -> Result<Self> {
-        let c_name = name.map(CString::new).transpose()?;
+        let c_name = name
+            .map(CString::new)
+            .transpose()
+            .map_err(|e| AppError::Internal(format!("Invalid C string: {}", e)))?;
         let name_ptr = if let Some(ref c_name) = c_name {
             c_name.as_ptr()
         } else {
@@ -232,7 +235,7 @@ impl<'env> Writer<'env> {
     }
 }
 
-fn to_cpath<P: AsRef<Path>>(path: P) -> Result<CString, Error> {
+fn to_cpath<P: AsRef<Path>>(path: P) -> Result<CString, AppError> {
     Ok(CString::new(path.as_ref().to_string_lossy().as_bytes())?)
 }
 
@@ -261,7 +264,7 @@ impl DbInner {
         let c_path = to_cpath(path)?;
 
         if let Err(e) = fs::create_dir_all(path) {
-            return Err(Error::Message(format!(
+            return Err(AppError::Internal(format!(
                 "Failed to create LMDB directory: `{e:?}`."
             )));
         }
@@ -363,11 +366,11 @@ impl Db {
         Writer::new(&self.inner)
     }
 
-    pub fn open_tree(&self, name: Option<&str>, flags: c_uint) -> std::result::Result<Tree, Error> {
+    pub fn open_tree(&self, name: Option<&str>, flags: c_uint) -> std::result::Result<Tree, AppError> {
         self.inner.open_tree(name, flags)
     }
 
-    pub fn drop_tree(&self, name: Option<&str>) -> std::result::Result<bool, Error> {
+    pub fn drop_tree(&self, name: Option<&str>) -> std::result::Result<bool, AppError> {
         self.inner.drop_tree(name)
     }
 
@@ -400,7 +403,7 @@ impl Db {
 }
 
 pub struct Iter<'txn> {
-    err: Option<Error>,
+    err: Option<AppError>,
     inner: Option<IterInner<'txn>>,
     rev: bool,
     op: c_uint,
@@ -534,7 +537,7 @@ impl<'txn> Iter<'txn> {
 }
 
 impl<'txn> Iterator for Iter<'txn> {
-    type Item = Result<(&'txn [u8], &'txn [u8]), Error>;
+    type Item = Result<(&'txn [u8], &'txn [u8]), AppError>;
     fn next(&mut self) -> Option<Self::Item> {
         if let Some(ref mut inner) = self.inner {
             let op = mem::replace(&mut self.op, self.next_op);
@@ -542,16 +545,16 @@ impl<'txn> Iterator for Iter<'txn> {
             // self.op = self.next_op;
             item.transpose()
         } else {
-            self.err.as_ref().map(|err| Err(err.clone()))
+            self.err.as_ref().map(|err| Err(AppError::Internal(err.to_string())))
         }
     }
 }
 
-fn lmdb_error(err_code: c_int) -> Error {
+fn lmdb_error(err_code: c_int) -> AppError {
     unsafe {
         // This is safe since the error messages returned from mdb_strerror are static.
         let err: *const c_char = ffi::mdb_strerror(err_code) as *const c_char;
-        Error::Lmdb(std::str::from_utf8_unchecked(CStr::from_ptr(err).to_bytes()).to_string())
+        AppError::Lmdb(std::str::from_utf8_unchecked(CStr::from_ptr(err).to_bytes()).to_string())
     }
 }
 

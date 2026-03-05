@@ -1,8 +1,11 @@
 // rnostr/src/handler.rs
 
-use crate::state::{AppState, AuthState, BroadcastMessage};
-use crate::message::{IncomingMessage, OutgoingMessage};
-use crate::filter::Filter;
+use crate::{
+    state::{AppState, AuthState, BroadcastMessage},
+    message::IncomingMessage,
+    error::AppError,
+};
+
 use serde_json::Value;
 use std::sync::Arc;
 use tracing::{error, info, warn};
@@ -13,7 +16,7 @@ pub async fn handle_message(
     text: &str,
     state: &Arc<AppState>,
     conn_id: Uuid,
-) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+) -> Result<(), AppError> {
     let msg: IncomingMessage = match serde_json::from_str(text) {
         Ok(m) => m,
         Err(e) => {
@@ -48,24 +51,24 @@ pub async fn handle_message(
 
 /// 处理 EVENT 消息（只允许 DM/房间相关）
 async fn handle_event(
-    mut event: Value,
+    event: Value,
     state: &Arc<AppState>,
     conn_id: Uuid,
-) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+) -> Result<(), AppError> {
     let conn_opt = state.connections.get(&conn_id);
-    let conn = conn_opt.ok_or("connection gone")?;
+    let conn = conn_opt.ok_or(AppError::Internal("connection gone".to_string()))?;
 
     // 1. 必须已认证
     if !conn.auth_state.is_authenticated() {
-        return Err("unauthenticated".into());
+        return Err(AppError::AuthRequired);
     }
 
     // 2. 提取 kind
-    let kind = event["kind"].as_u64().ok_or("missing kind")?;
+    let kind = event["kind"].as_u64().ok_or(AppError::InvalidEvent("missing kind".to_string()))?;
     
     // 只允许 IM 相关 kind（可扩展）
     if kind != 1059 && kind != 14 && !is_room_control_kind(kind) {
-        return Err("non-im event rejected".into());
+        return Err(AppError::InvalidEventKind);
     }
 
     // 3. 验证签名、过期 tag 等（这里简化）
@@ -82,7 +85,7 @@ async fn handle_event(
     }
 
     // 5. 本地广播
-    state.broadcast.send(BroadcastMessage::Event(event.clone()))?;
+    state.broadcast.send(BroadcastMessage::Event(event.clone())).map_err(|e| AppError::Internal(e.to_string()))?;
 
     // 6. 如果本地可能无订阅者，且是房间消息，尝试 P2P 转发
     if is_room_message(&event) && !has_local_subscribers_for_room(&event, state).await? {
@@ -100,20 +103,20 @@ async fn handle_req(
     sub: crate::message::ReqPayload,
     state: &Arc<AppState>,
     conn_id: Uuid,
-) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let mut conn = state.connections.get_mut(&conn_id).ok_or("conn gone")?;
+) -> Result<(), AppError> {
+    let conn = state.connections.get_mut(&conn_id).ok_or(AppError::Internal("conn gone".to_string()))?;
 
     // 限制 filter 只支持 IM 常用字段
     for filter in &sub.filters {
         if !filter.is_im_compatible() {
-            return Err("unsupported filter fields for IM relay".into());
+            return Err(AppError::UnsupportedFilter);
         }
     }
 
     // 订阅上限检查
     let setting = state.setting.read();
     if conn.subscriptions.len() >= setting.max_subscriptions_per_conn {
-        return Err("too many subscriptions".into());
+        return Err(AppError::TooManySubscriptions(setting.max_subscriptions_per_conn));
     }
 
     for filter in &sub.filters {
@@ -128,8 +131,8 @@ async fn handle_close(
     sub_id: String,
     state: &Arc<AppState>,
     conn_id: Uuid,
-) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    if let Some(mut conn) = state.connections.get_mut(&conn_id) {
+) -> Result<(), AppError> {
+    if let Some(conn) = state.connections.get_mut(&conn_id) {
         conn.subscriptions.remove(&sub_id);
     }
     Ok(())
@@ -137,10 +140,10 @@ async fn handle_close(
 
 /// 处理 AUTH（SIWE 占位）
 async fn handle_auth(
-    auth_event: Value,
+    _auth_event: Value,
     state: &Arc<AppState>,
     conn_id: Uuid,
-) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+) -> Result<(), AppError> {
     info!("SIWE auth placeholder: event received");
 
     if let Some(mut conn) = state.connections.get_mut(&conn_id) {
@@ -152,10 +155,10 @@ async fn handle_auth(
 
 /// 处理 COUNT（简化版）
 async fn handle_count(
-    sub: crate::message::ReqPayload,
-    state: &Arc<AppState>,
-    conn_id: Uuid,
-) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    _sub: crate::message::ReqPayload,
+    _state: &Arc<AppState>,
+    _conn_id: Uuid,
+) -> Result<(), AppError> {
     Ok(())
 }
 
@@ -178,9 +181,9 @@ fn extract_room_id(event: &Value) -> Option<String> {
 }
 
 async fn has_local_subscribers_for_room(
-    event: &Value,
-    state: &Arc<AppState>,
-) -> Result<bool, Box<dyn std::error::Error + Send + Sync>> {
+    _event: &Value,
+    _state: &Arc<AppState>,
+) -> Result<bool, AppError> {
     Ok(false)
 }
 

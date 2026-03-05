@@ -19,16 +19,16 @@ pub mod auth;
 pub mod ws;
 pub mod config;
 pub mod error;
-pub mod gc;
-pub mod storage;
+pub mod db;
 pub mod upload;
+pub mod storage;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     fmt::init();
 
     // 加载配置（支持热重载）
-    let config_manager = ConfigManager::load("rnostr.toml")?;
+    let config_manager = ConfigManager::load("config.toml")?;
     let config = config_manager.get();
 
     // 监听配置变更（可选：动态调整某些运行时参数）
@@ -43,11 +43,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         siwe_chain_id: config.siwe.chain_id,
         max_subscriptions_per_conn: config.connection.max_subscriptions_per_conn,
         event_ttl_seconds: config.connection.event_ttl_seconds,
+        blob_dir: config.blob_dir.clone(),
+        // ... 其他配置项
     };
 
     let state = Arc::new(AppState::new(
         setting,
-        Arc::new(mesh::DummyMeshProxy) as Arc<dyn mesh::MeshProxy + Send + Sync>,
+        Arc::new(mesh::DummyMesh) as Arc<dyn mesh::MeshProxy + Send + Sync>,
     ));
 
     let addr: SocketAddr = config.listen_addr.parse()?;

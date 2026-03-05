@@ -2,6 +2,7 @@
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::collections::HashMap;
 
 /// IM 专用订阅过滤器（严格限制字段）
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -27,7 +28,7 @@ pub struct Filter {
 
     // 只支持 #e #p #room
     #[serde(default)]
-    pub tags: std::collections::HashMap<String, Vec<String>>,
+    pub tags: HashMap<String, Vec<String>>,
 }
 
 impl Filter {

@@ -1,7 +1,7 @@
 // relay-core/src/auth.rs
 
 use crate::state::{AppState, AuthState};
-use crate::message::{IncomingMessage, OutgoingMessage};
+use crate::message::{OutgoingMessage};
 use chrono::{DateTime, Utc};
 use siwe::Message as SiweMessage;
 use siwe::VerificationOpts;

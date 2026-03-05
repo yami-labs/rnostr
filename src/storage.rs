@@ -1,28 +1,70 @@
 // src/storage.rs
 
-use crate::db::{Db, LmdbResult, Reader, Tree, Writer};
+use crate::db::{Db, Tree, Scanner, TimeKey};
+use crate::db::lmdb::Transaction;
 use crate::filter::Filter;
+use crate::error::Error;
+use crate::db::MatchResult;
 use serde_json::Value;
 use std::sync::Arc;
-use tracing::{error, info, warn};
+use std::cmp::Ordering;
+use std::ops::Bound;
+use tracing::info;
 
-/// IM 专用存储封装（基于内置的 db::lmdb）
+/// 事件作为 TimeKey 的实现（用于 scanner 时间扫描）
+#[derive(Clone, Debug)]
+struct EventTimeKey {
+    created_at: u64,
+    id: String,  // 用于 cmp tie-breaker
+}
+
+impl TimeKey for EventTimeKey {
+    fn time(&self) -> u64 {
+        self.created_at
+    }
+
+    fn change_time(&self, _key: &[u8], time: u64) -> Vec<u8> {
+        format!("{}:{}", time, self.id).into_bytes()
+    }
+}
+
+impl PartialOrd for EventTimeKey {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(<Self as Ord>::cmp(self, other))
+    }
+}
+
+impl Ord for EventTimeKey {
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.time().cmp(&other.time()).then_with(|| self.id.cmp(&other.id))
+    }
+}
+
+impl PartialEq for EventTimeKey {
+    fn eq(&self, other: &Self) -> bool {
+        self.time() == other.time() && self.id == other.id
+    }
+}
+
+impl Eq for EventTimeKey {}
+
+/// IM 专用存储封装
 pub struct ImStorage {
     db: Arc<Db>,
-    /// 默认事件树（主存储）
+    // 主事件树
     main_tree: Tree,
-    /// 房间索引树（可选加速）
+    // 房间索引树
     room_index_tree: Tree,
 }
 
 impl ImStorage {
-    pub fn new(db_path: &str) -> LmdbResult<Self> {
+    pub fn new(db_path: &str) -> Result<Self, Error> {
         let db = Db::open(db_path)?;
-        
-        // 打开主事件树（无名称 = default）
+
+        // 打开主事件树（默认无名）
         let main_tree = db.open_tree(None, 0)?;
-        
-        // 打开房间索引树（用固定名称）
+
+        // 打开房间索引树
         let room_index_tree = db.open_tree(Some("room_index"), 0)?;
 
         Ok(Self {
@@ -32,50 +74,49 @@ impl ImStorage {
         })
     }
 
-    /// 保存事件（存到主树 + 更新房间索引）
-    pub async fn save_event(&self, event: &Value) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        let id = event["id"].as_str().ok_or("missing id")?.to_string();
+    /// 保存事件 + 更新房间索引
+    pub async fn save_event(&self, event: &Value) -> Result<(), Error> {
+        let id = event["id"].as_str().ok_or(Error::InvalidEvent("missing id".to_string()))?.to_string();
         let bytes = serde_json::to_vec(event)?;
 
         let mut writer = self.db.writer()?;
-        
-        // 存主事件（key = id, value = json bytes）
+
+        // 存主事件
         writer.put(&self.main_tree, id.as_bytes(), &bytes)?;
 
-        // 如果有 #room tag，更新房间索引
+        // 更新房间索引
         if let Some(room_id) = extract_room_id(event) {
-            let created_at = event["created_at"].as_u64().unwrap_or(0);
-            let index_key = format!("{}:{}", created_at, id);
-            writer.put(&self.room_index_tree, index_key.as_bytes(), &[])?; // value 可以为空，只用 key
+            let created_at = event["created_at"].as_u64().ok_or(Error::InvalidEvent("missing created_at".to_string()))?;
+            let index_key = format!("{}:{}", room_id, created_at);
+            writer.put(&self.room_index_tree, index_key.as_bytes(), id.as_bytes())?;
         }
 
         writer.commit()?;
+
         info!("Stored IM event: {}", id);
         Ok(())
     }
 
-    /// 根据 filter 查询事件（优先房间索引）
+    /// 根据 filter 查询事件
     pub async fn query_by_filter(
         &self,
         filter: &Filter,
-    ) -> Result<Vec<Value>, Box<dyn std::error::Error + Send + Sync>> {
+    ) -> Result<Vec<Value>, Error> {
         let mut results = Vec::new();
 
         let reader = self.db.reader()?;
 
-        // 优先走房间索引
+        // 优先房间索引扫描
         if let Some(room_values) = filter.tags.get("room") {
             if let Some(room_id) = room_values.first() {
-                let prefix = format!("{}:", room_id); // 假设 key 是 "room_id:created_at:event_id"
+                let prefix = format!("{}:", room_id);
                 let mut iter = reader.iter_from(&self.room_index_tree, Bound::Included(prefix.as_bytes()), false);
 
                 while let Some(item) = iter.next() {
-                    let (key, _) = item?;
-                    let key_str = String::from_utf8_lossy(key);
-                    let parts: Vec<&str> = key_str.splitn(2, ':').collect();
-                    if parts.len() != 2 { continue; }
-                    let event_id = parts[1];
+                    let (key, value) = item?;
+                    let event_id = String::from_utf8_lossy(value).to_string();
 
+                    // 从主树取事件
                     if let Some(event_bytes) = reader.get(&self.main_tree, event_id.as_bytes())? {
                         if let Ok(event) = serde_json::from_slice::<Value>(&event_bytes) {
                             if filter.matches(&event) {
@@ -88,57 +129,54 @@ impl ImStorage {
             }
         }
 
-        // 作者过滤（次优先）
-        if !filter.authors.is_empty() {
-            // 假设主树有 pubkey 前缀索引（如果没有，需要在 save 时维护）
-            // 这里简化：全扫描 + 过滤
-            warn!("Author filter fallback to full scan");
-            let mut iter = reader.iter(&self.main_tree);
-            while let Some(item) = iter.next() {
-                let (_, value) = item?;
-                if let Ok(event) = serde_json::from_slice::<Value>(value) {
+        // 作者过滤或全扫描，使用 Scanner 优化时间范围
+        let mut scanner: Scanner<EventTimeKey, _> = Scanner::new(
+            reader.iter(&self.main_tree),
+            vec![],  // key (dummy)
+            vec![],  // prefix (full scan)
+            false,   // reverse
+            filter.since,
+            filter.until,
+            Box::new(|_scanner: &Scanner<EventTimeKey, Error>, (key, value): (&[u8], &[u8])| -> Result<MatchResult<EventTimeKey>, Error> {
+                let event_id = String::from_utf8_lossy(key).to_string();
+                // Extract created_at from the event value
+                let created_at = if let Ok(event) = serde_json::from_slice::<Value>(value) {
+                    event["created_at"].as_u64().unwrap_or(0)
+                } else {
+                    0
+                };
+                Ok(MatchResult::Found(EventTimeKey { created_at, id: event_id }))
+            }),
+        );
+
+        while let Some(item) = scanner.next() {
+            let key = item?;
+            let event_id = key.id;
+            if let Some(event_bytes) = reader.get(&self.main_tree, event_id.as_bytes())? {
+                if let Ok(event) = serde_json::from_slice::<Value>(&event_bytes) {
                     if filter.matches(&event) {
                         results.push(event);
                     }
                 }
             }
-            return Ok(results);
         }
 
-        // 兜底全扫描
-        warn!("Full scan query - performance warning");
-        let mut iter = reader.iter(&self.main_tree);
-        while let Some(item) = iter.next() {
-            let (_, value) = item?;
-            if let Ok(event) = serde_json::from_slice::<Value>(value) {
-                if filter.matches(&event) {
-                    results.push(event);
-                }
-            }
-        }
-
-        results.sort_by_key(|e| e["created_at"].as_u64().unwrap_or(0));
         Ok(results)
     }
 
-    /// 删除单个事件（用于 GC）
-    pub fn delete_event(&self, event_id: &str) -> LmdbResult<()> {
-        let mut writer = self.db.writer()?;
-        writer.del(&self.main_tree, event_id.as_bytes(), None)?;
-        writer.commit()
-    }
-
-    /// GC 过期事件（从 gc.rs 调用）
-    pub async fn gc_expired(&self, now: u64) -> Result<usize, Box<dyn std::error::Error + Send + Sync>> {
+    /// GC 过期事件
+    pub async fn gc_expired(&self, now: u64) -> Result<usize, Error> {
         let mut removed = 0;
+
         let reader = self.db.reader()?;
+
         let mut iter = reader.iter(&self.main_tree);
 
         while let Some(item) = iter.next() {
-            let (key_bytes, value_bytes) = item?;
-            let event_id = String::from_utf8_lossy(key_bytes).to_string();
+            let (key, value) = item?;
+            let event_id = String::from_utf8_lossy(key).to_string();
 
-            if let Ok(event) = serde_json::from_slice::<Value>(value_bytes) {
+            if let Ok(event) = serde_json::from_slice::<Value>(value) {
                 let expire = event["tags"]
                     .as_array()
                     .and_then(|tags| tags.iter().find(|t| t[0].as_str() == Some("expire")))
@@ -146,7 +184,9 @@ impl ImStorage {
 
                 if let Some(exp) = expire {
                     if exp < now {
-                        self.delete_event(&event_id)?;
+                        let mut writer = self.db.writer()?;
+                        writer.del(&self.main_tree, event_id.as_bytes(), None)?;
+                        writer.commit()?;
                         removed += 1;
                     }
                 }

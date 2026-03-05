@@ -1,17 +1,9 @@
 [package]
 name = "nostr-relay"
-version = "0.4.8"
-description = "A high-performance and scalable nostr relay library."
+version = "0.1.0"
 keywords = ["nostr", "nostr-relay"]
-edition = "2021"
+edition = "2024"
 license = "MIT OR Apache-2.0"
-homepage = "https://github.com/rnostr"
-repository = "https://github.com/rnostr/rnostr.git"
-authors = ["Arron zhang <arronzhang@me.com>"]
-
-[[bin]]
-path = "src/main.rs"
-name = "rnostr"
 
 [dependencies]
 axum = { version = "0.8", features = ["ws", "macros"] }
@@ -48,6 +40,20 @@ sha2 = "0.10.9"
 tokio-util = "0.7"
 mime_guess = "2"
 tracing-subscriber = "0.3"
+futures = "0.3.32"
+libp2p = { version = "0.56", features = [
+    "tcp",
+    "tokio",
+    "noise",
+    "yamux",
+    "gossipsub",
+    "kad",
+    "identify",
+    "ping",
+    "mdns",
+    "macros"
+] }
+axum-extra = { version = "0.12.5", features = ["multipart"] }
 
 [dev-dependencies]
 anyhow = "1.0.86"

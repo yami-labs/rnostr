@@ -7,9 +7,7 @@ pub use lmdb::{
     Reader,
     Writer,
     Tree,
-    Iter,
-    Error as LmdbError,
-    Result as LmdbResult,
+    Iter
 };
 
 pub use scanner::{

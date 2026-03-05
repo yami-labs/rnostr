@@ -1,8 +1,10 @@
 // rnostr/src/state.rs
 
-use crate::filter::Filter;           // 后面会定义
-use crate::mesh::MeshProxy;          // P2P 转发接口
-use crate::message::OutgoingMessage;
+use crate::{
+    filter::Filter,
+    mesh::MeshProxy,
+    message::OutgoingMessage
+};
 use dashmap::DashMap;
 use parking_lot::RwLock;
 use serde_json::Value;
@@ -26,7 +28,7 @@ pub struct AppState {
     /// 当前连接数（用于监控）
     pub connection_count: Arc<AtomicU64>,
     
-    /// P2P mesh 转发代理（ libp2p 或 dummy 实现）
+    /// P2P mesh 转发代理（libp2p 或 dummy 实现）
     pub mesh_proxy: Arc<dyn MeshProxy + Send + Sync>,
     
     /// 房间事件快速索引（加速房间历史查询）
@@ -47,7 +49,6 @@ pub struct ConnectionState {
 pub enum AuthState {
     Unauthenticated,
     SiweAddress(String),   // Ethereum 地址 (checksummed hex)
-    Pubkey(String),        // nostr pubkey hex（兼容模式，可选）
 }
 
 impl AuthState {
@@ -55,10 +56,9 @@ impl AuthState {
         !matches!(self, AuthState::Unauthenticated)
     }
 
-    pub fn address_or_pubkey(&self) -> Option<String> {
+    pub fn address(&self) -> Option<String> {
         match self {
             AuthState::SiweAddress(addr) => Some(addr.clone()),
-            AuthState::Pubkey(pk) => Some(pk.clone()),
             _ => None,
         }
     }
@@ -82,6 +82,7 @@ pub struct Setting {
     pub siwe_chain_id: u64,
     pub max_subscriptions_per_conn: usize,
     pub event_ttl_seconds: u64, // 过期时间（默认 1 年 = 31536000）
+    pub blob_dir: String,       // 文件上传目录
     // ... 其他配置
 }
 

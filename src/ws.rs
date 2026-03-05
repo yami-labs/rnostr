@@ -1,9 +1,10 @@
 // rnostr/src/ws.rs
 
-use crate::auth::SiweAuthenticator;
-use crate::handler::handle_message;
-use crate::message::OutgoingMessage;
-use crate::state::{AppState, AuthState, BroadcastMessage};
+use crate::{
+    state::{AppState, AuthState, ConnectionState},
+    auth::SiweAuthenticator,
+    handler::handle_message,
+};
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::response::Response;
 use axum::routing::get;
@@ -11,7 +12,6 @@ use axum::Router;
 use dashmap::DashMap;
 use futures_util::{SinkExt, StreamExt};
 use std::sync::Arc;
-use tokio::sync::broadcast;
 use tracing::{error, info, warn};
 use uuid::Uuid;
 
@@ -31,7 +31,7 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
     state.increment_connection();
 
     // 创建连接状态
-    let conn_state = crate::state::ConnectionState {
+    let conn_state = ConnectionState {
         id: conn_id,
         auth_state: AuthState::Unauthenticated,
         subscriptions: DashMap::new(),

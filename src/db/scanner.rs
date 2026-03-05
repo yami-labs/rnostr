@@ -1,4 +1,5 @@
-use crate::{lmdb::Iter, Error};
+use crate::error::AppError;
+use crate::db::lmdb::Iter;
 use std::{
     cmp::Ordering,
     ops::{Bound, Deref, DerefMut},
@@ -110,7 +111,7 @@ impl<E> Clone for Box<dyn ScannerWatcher<E>> {
 pub struct Group<'txn, K, E>
 where
     K: TimeKey,
-    E: From<Error>,
+    E: From<AppError>,
 {
     onlyone: Option<GroupItemType<'txn, K, E>>,
     items: Vec<GroupItemType<'txn, K, E>>,
@@ -127,7 +128,7 @@ where
 impl<'txn, K, E> Group<'txn, K, E>
 where
     K: TimeKey,
-    E: From<Error>,
+    E: From<AppError>,
 {
     pub fn new(reverse: bool, and: bool, dup: bool) -> Self {
         Self {
@@ -284,7 +285,7 @@ where
 impl<'txn, K, E> Iterator for Group<'txn, K, E>
 where
     K: TimeKey,
-    E: From<Error>,
+    E: From<AppError>,
 {
     type Item = Result<K, E>;
     fn next(&mut self) -> Option<Self::Item> {
@@ -310,7 +311,7 @@ where
     }
 }
 
-impl<'txn, K: TimeKey, E: From<Error>> GroupItem<'txn, K, E> for Group<'txn, K, E> {
+impl<'txn, K: TimeKey, E: From<AppError>> GroupItem<'txn, K, E> for Group<'txn, K, E> {
     /// Set the watcher for watching number of scans, stop scanning
     fn watcher(&mut self, watcher: ScannerWatcherType<E>) {
         self.watcher = Some(watcher.clone());
@@ -330,7 +331,7 @@ impl<'txn, K: TimeKey, E: From<Error>> GroupItem<'txn, K, E> for Group<'txn, K, 
 // pub enum GroupType<'txn, K, E>
 // where
 //     K: TimeKey,
-//     E: From<Error>,
+//     E: From<AppError>,
 // {
 //     One(Scanner<'txn, K, E>),
 //     // scanners,
@@ -356,7 +357,7 @@ pub enum MatchResult<K> {
 /// time base scanner
 pub struct Scanner<'txn, K, E>
 where
-    E: From<Error>,
+    E: From<AppError>,
 {
     pub inner: Iter<'txn>,
     // search key bytes
@@ -378,7 +379,7 @@ where
 impl<'txn, K, E> Scanner<'txn, K, E>
 where
     K: TimeKey,
-    E: From<Error>,
+    E: From<AppError>,
 {
     pub fn new(
         iter: Iter<'txn>,
@@ -476,7 +477,7 @@ where
 impl<'txn, K, E> Iterator for Scanner<'txn, K, E>
 where
     K: TimeKey,
-    E: From<Error>,
+    E: From<AppError>,
 {
     type Item = Result<K, E>;
     fn next(&mut self) -> Option<Self::Item> {
@@ -484,7 +485,7 @@ where
     }
 }
 
-impl<'txn, K: TimeKey, E: From<Error>> GroupItem<'txn, K, E> for Scanner<'txn, K, E> {
+impl<'txn, K: TimeKey, E: From<AppError>> GroupItem<'txn, K, E> for Scanner<'txn, K, E> {
     fn watcher(&mut self, _watcher: ScannerWatcherType<E>) {
         // ignore
     }

@@ -4,7 +4,7 @@ use thiserror::Error;
 
 /// 项目统一错误类型
 #[derive(Error, Debug)]
-pub enum Error {
+pub enum AppError {
     // ==================== 通用错误 ====================
     #[error("IO error: {0}")]
     Io(#[from] std::io::Error),
@@ -24,6 +24,9 @@ pub enum Error {
     // ==================== WebSocket / Axum 相关 ====================
     #[error("WebSocket error: {0}")]
     Ws(#[from] axum::Error),
+
+    #[error("Multipart error: {0}")]
+    Multipart(String),
 
     #[error("Invalid WebSocket message format")]
     InvalidWsMessage,
@@ -70,6 +73,9 @@ pub enum Error {
     #[error("LMDB error: {0}")]
     Lmdb(String),
 
+    #[error("Nul error: {0}")]
+    NulError(#[from] std::ffi::NulError),
+
     #[error("Storage operation failed: {0}")]
     Storage(String),
 
@@ -90,15 +96,39 @@ pub enum Error {
     MimeMismatch,
 
     // ==================== P2P mesh 相关 ====================
+    #[error("Mesh initialization failed: {0}")]
+    MeshInit(String),
+
     #[error("Mesh forwarding failed: {0}")]
     MeshForward(String),
 
     #[error("Mesh query failed")]
     MeshQueryFailed,
 
+    #[error("Gossipsub error: {0}")]
+    Gossipsub(String),
+
+    #[error("Kademlia error: {0}")]
+    Kademlia(String),
+
+    #[error("mDNS error: {0}")]
+    Mdns(String),
+
+    #[error("P2P network error: {0}")]
+    Network(String),
+
+    #[error("Peer not found: {0}")]
+    PeerNotFound(String),
+
+    #[error("Not enough peers for backup operation")]
+    InsufficientPeers,
+
     // ==================== GC / 定时任务 ====================
     #[error("GC operation failed: {0}")]
     GcFailed(String),
 }
+
+// 统一错误类型别名
+pub type Error = AppError;
 
 // 如果未来有其他错误来源，也可以继续加 From 实现
