@@ -1,60 +1,66 @@
-//! Rnostr cli
-use clap::Parser;
-#[macro_use]
-extern crate clap;
+// rnostr/src/main.rs
 
-use rnostr::*;
+use crate::{
+    config::{ConfigManager, RelayConfig},
+    state::{AppState, Setting},
+    ws::create_router,
+};
+use std::net::SocketAddr;
+use std::sync::Arc;
+use tracing::info;
+use tracing_subscriber::fmt;
 
-/// Cli
-#[derive(Debug, Parser)]
-#[command(name = "rnostr", about = "Rnostr cli.", version)]
-struct Cli {
-    #[command(subcommand)]
-    command: Commands,
-}
+pub mod state;
+pub mod handler;
+pub mod filter;
+pub mod mesh;
+pub mod message;
+pub mod auth;
+pub mod ws;
+pub mod config;
+pub mod error;
+pub mod gc;
+pub mod storage;
+pub mod upload;
 
-/// Commands
-#[derive(Debug, Subcommand)]
-enum Commands {
-    /// Import data from jsonl file
-    #[command(arg_required_else_help = true)]
-    Import(ImportOpts),
-    /// Export data to jsonl file
-    #[command(arg_required_else_help = true)]
-    Export(ExportOpts),
-    /// Benchmark filter
-    #[command(arg_required_else_help = true)]
-    Bench(BenchOpts),
-    /// Start nostr relay server
-    Relay(RelayOpts),
-    /// Delete data by filter
-    Delete(DeleteOpts),
-}
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    fmt::init();
 
-fn main() -> anyhow::Result<()> {
-    let args = Cli::parse();
-    match args.command {
-        Commands::Import(opts) => {
-            let total = import_opts(opts)?;
-            println!("imported {} events", total);
-        }
-        Commands::Export(opts) => {
-            export_opts(opts)?;
-        }
-        Commands::Bench(opts) => {
-            bench_opts(opts)?;
-        }
-        Commands::Relay(opts) => {
-            relay(&opts.config, opts.watch)?;
-        }
-        Commands::Delete(opts) => {
-            let count = delete(&opts.path, &opts.filter, opts.dry_run)?;
-            if opts.dry_run {
-                println!("Would delete {} events", count);
-            } else {
-                println!("Deleted {} events", count);
-            }
-        }
-    }
+    // 加载配置（支持热重载）
+    let config_manager = ConfigManager::load("rnostr.toml")?;
+    let config = config_manager.get();
+
+    // 监听配置变更（可选：动态调整某些运行时参数）
+    let _reload_rx = config_manager.reload_tx.subscribe();
+    // 注意：配置热重载功能暂时不启用，因为涉及复杂的生命周期管理
+
+    // 将 RelayConfig 转换为 Setting
+    let setting = Setting {
+        listen_addr: config.listen_addr.clone(),
+        siwe_domain: config.siwe.domain.clone(),
+        siwe_uri: config.siwe.uri.clone(),
+        siwe_chain_id: config.siwe.chain_id,
+        max_subscriptions_per_conn: config.connection.max_subscriptions_per_conn,
+        event_ttl_seconds: config.connection.event_ttl_seconds,
+    };
+
+    let state = Arc::new(AppState::new(
+        setting,
+        Arc::new(mesh::DummyMeshProxy) as Arc<dyn mesh::MeshProxy + Send + Sync>,
+    ));
+
+    let addr: SocketAddr = config.listen_addr.parse()?;
+
+    let app = create_router(state);
+
+    info!("Starting relay on {}", addr);
+
+    let listener = tokio::net::TcpListener::bind(addr).await?;
+    
+    info!("TLS disabled, listening on http://{}", addr);
+    axum::serve(listener, app)
+        .await?;
+
     Ok(())
 }

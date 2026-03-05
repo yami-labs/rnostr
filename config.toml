@@ -1,0 +1,28 @@
+listen_addr = "0.0.0.0:8080"
+
+lmdb_path = "./lmdb-data"
+blob_dir = "./blobs"
+
+[siwe]
+enabled = true
+domain = "myim-relay.example.com"
+uri = "wss://myim-relay.example.com"
+chain_id = 1
+
+[gc]
+interval_seconds = 3600
+default_event_ttl = 31536000   # 1年
+min_event_ttl = 15552000       # 6个月
+
+[connection]
+max_subscriptions_per_conn = 50
+max_message_size = 1048576     # 1MB
+
+[metrics]
+enabled = true
+endpoint = "/metrics"
+
+[tls]
+enabled = false
+cert_path = "./cert.pem"
+key_path = "./key.pem"
